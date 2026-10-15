@@ -3,3 +3,12 @@ node_modules/
 .sites-runtime/
 .sites-checkout/
 *.local.json
+
+/dist/
+/.wrangler/
+/.vinext/
+/.next/
+/.sites-runtime/
+.env*
+*.tsbuildinfo
+next-env.d.ts
