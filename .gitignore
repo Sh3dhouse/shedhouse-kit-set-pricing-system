@@ -1,0 +1,6 @@
+/work/
+/*.xlsx
+*.inspect.ndjson
+app/node_modules/
+app/.openai/*.local*
+app/.sites/
