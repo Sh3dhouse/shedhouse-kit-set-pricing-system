@@ -12,3 +12,5 @@ export const quoteHistory=sqliteTable('quote_history',{
  quoteId:text('quote_id').notNull(),revision:integer('revision').notNull(),document:text('document').notNull(),
  action:text('action').notNull(),changedAt:text('changed_at').notNull(),changedBy:text('changed_by').notNull(),changedByEmail:text('changed_by_email').notNull()
 },t=>[primaryKey({columns:[t.quoteId,t.revision]})]);
+export const pricingRates=sqliteTable('pricing_rates',{version:text('version').primaryKey(),document:text('document').notNull(),publishedAt:text('published_at').notNull(),publishedBy:text('published_by').notNull()});
+export const quoteIssues=sqliteTable('quote_issues',{id:text('id').primaryKey(),quoteId:text('quote_id').notNull(),quoteRevision:integer('quote_revision').notNull(),document:text('document').notNull(),result:text('result').notNull(),issuedAt:text('issued_at').notNull(),issuedBy:text('issued_by').notNull()},t=>[index('quote_issues_quote').on(t.quoteId,t.quoteRevision)]);

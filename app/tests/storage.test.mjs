@@ -1,5 +1,5 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';import {DatabaseSync} from 'node:sqlite';import fs from 'node:fs';
-import {repository,requireIdentity,requireMutation} from '../server/quotes.mjs';import {newQuote} from '../public/pricing.js';
+import {repository,requireIdentity,requireMutation} from '../server/quotes.mjs';import {newQuote} from '../public/legacy-pricing.js';
 const bases=JSON.parse(fs.readFileSync(new URL('../public/bases.json',import.meta.url)));
 const user={userId:'test-user-a',email:'qa-a@sites.test'},other={userId:'test-user-b',email:'qa-b@sites.test'};
 function fixture(){const sql=new DatabaseSync(':memory:');sql.exec(`CREATE TABLE quotes (id TEXT PRIMARY KEY,variant TEXT NOT NULL,document TEXT NOT NULL,revision INTEGER NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,created_by TEXT NOT NULL,updated_by TEXT NOT NULL,updated_by_email TEXT NOT NULL,archived_at TEXT,mutation_id TEXT NOT NULL);CREATE TABLE quote_history (quote_id TEXT,revision INTEGER,document TEXT,action TEXT,changed_at TEXT,changed_by TEXT,changed_by_email TEXT,PRIMARY KEY(quote_id,revision));`);

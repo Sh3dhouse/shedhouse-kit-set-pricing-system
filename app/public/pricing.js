@@ -1,46 +1,68 @@
-// Framework-independent pricing contract shared by both workflows and future SHP adapters.
-export const SCHEMA_VERSION='1.0';
-export const WORK_TYPES=[['SLAB','Slab supply & installation'],['SITE','Earthworks & site preparation'],['ERECTION','Kit-set erection'],['PRELIMS','Preliminary & general'],['CONSENT','Consent fees'],['ENGINEERING','Engineering & inspections'],['OTHER1','Other work 1'],['OTHER2','Other work 2']];
-export const COST_TYPES=[['primary','Primary kit supply'],['secondary','Secondary kit / garage'],['freight','Kit freight'],['paFreight','PA door freight'],['rollerFreight','Roller door freight'],['delivery','Delivery to site'],['extras','Other supply extras']];
-export const round=n=>Math.round((n+Number.EPSILON)*100)/100;
-export const amount=v=>v===null||v===undefined||(typeof v==='string'&&v.trim()==='')?null:(typeof v==='number'?v:Number(v));
-export const todayNZ=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Pacific/Auckland',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
-export function newQuote(variant,baseId=1){return {id:crypto.randomUUID(),variant,baseId,customer:'',site:'',reference:'',date:todayNZ(),validUntil:'',specification:'',supplierReference:'',supplierQuote:'',inclusions:'',exclusions:variant==='KIT_ONLY'?'Slab, earthworks, erection, site labour, consent and engineering services unless expressly included.':'',terms:'',method:'Markup',rate:'',gst:15,costs:{},work:WORK_TYPES.map(([code])=>({code,included:false,scope:'',unit:'sum',quantity:'',unitCost:'',markup:''})),costsConfirmed:false,scopeConfirmed:false,updatedAt:null};}
-function realDate(s){return /^\d{4}-\d{2}-\d{2}$/.test(s)&&!isNaN(Date.parse(s))&&new Date(s+'T00:00:00Z').toISOString().slice(0,10)===s;}
-export function calculate(q,bases){
+import * as legacy from './legacy-pricing.js';
+export const SCHEMA_VERSION='2.0';
+export const {COST_TYPES,WORK_TYPES,todayNZ,amount}=legacy;
+export const DEFAULT_RATES=Object.freeze({version:'SH-2026-V2-1',residentialRate:2700,garageRate:1200,kitMargin:30,constructionMargin:10,contingency:5,gst:15,validated:false});
+export const ARRANGEMENTS={SUPPLY_ONLY:'Kitset supply only',CUSTOMER_MANAGED:'Customer-managed subcontractors',SH_MANAGED:'Fully managed construction'};
+// Decimal half-up rounding at monetary boundaries.
+export function round(value){if(!Number.isFinite(value))return null;const [m,e='0']=String(value).split('e');return Number(Math.round(Number(m+'e'+(Number(e)+2)))+'e-2');}
+export const addDays=(date,n)=>{const d=new Date(date+'T00:00:00Z');if(!Number.isFinite(d.getTime()))return '';d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10);};
+export const isDate=s=>typeof s==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(s)&&!isNaN(Date.parse(s))&&new Date(s+'T00:00:00Z').toISOString().slice(0,10)===s;
+export function newQuote(variant,baseId=1,rates=DEFAULT_RATES){const q=legacy.newQuote(variant,baseId);return {...q,calculationVersion:'2.0',rateSet:{...rates},supplyComparable:Object.fromEntries(COST_TYPES.map(([k])=>[k,true])),arrangement:variant==='KIT_ONLY'?'SUPPLY_ONLY':'SH_MANAGED',residentialArea:'',garageArea:'',totalEnclosedArea:'',kitMargin:rates.kitMargin,constructionMargin:rates.constructionMargin,contingencyRate:rates.contingency,gst:rates.gst,validUntil:addDays(q.date,30),supplierExpiry:'',standardScopeConfirmed:false,pricingValidated:false,overrideReason:'',status:'DRAFT',work:q.work.map(w=>({...w,margin:rates.constructionMargin,payer:'SH',areaCategory:['SITE','CONSENT','ENGINEERING'].includes(w.code)?'SITE_SPECIFIC':'SHARED',comparable:false,uncertain:false,expiry:'',discount:0})),kitDiscount:0};}
+export function colourBand(rate){return !Number.isFinite(rate)?'Not comparable':rate<1950?'Pricing review':rate<=2250?'Green':rate<=2500?'Black':'Red';}
+const num=v=>{const n=amount(v);return n!==null&&Number.isFinite(n)?n:null;};
+const percent=v=>{const n=num(v);return n!==null&&n>=0&&n<100?n:null;};
+export function calculate(q,bases,asOf=todayNZ()){
+ if(q.calculationVersion!=='2.0')return legacy.calculate(q,bases);
  const issues=[],base=bases.find(b=>b.id===Number(q.baseId));
- if(!base)return {issues:['Choose a valid base proposal.'],costValid:false,ready:false,kitSale:null,total:null,work:[],activeCosts:[]};
- const activeCosts=COST_TYPES.map(([key,label])=>{const source=base[key]??0;const override=amount(q.costs[key]);const cost=override===null?source:override;return {key,label,source,cost,overridden:override!==null};});
- const costValid=activeCosts.every(r=>Number.isFinite(r.cost)&&r.cost>=0)&&activeCosts[0].cost>0;
+ const activeCosts=COST_TYPES.map(([key,label])=>{const source=base?.[key]??0,override=num(q.costs?.[key]);return {key,label,source,cost:amount(q.costs?.[key])===null?source:override,overridden:amount(q.costs?.[key])!==null};});
+ const costValid=!!base&&activeCosts.every(x=>x.cost!==null&&x.cost>=0)&&activeCosts[0].cost>0;
  if(!costValid)issues.push('Enter valid supply costs; primary kit cost must be above zero.');
- const rate=amount(q.rate)===null?(q.method==='Markup'?base.markup:base.markup/(1+base.markup)):amount(q.rate)/100;
- const rateValid=Number.isFinite(rate)&&rate>=0&&['Markup','Gross margin'].includes(q.method)&&(q.method!=='Gross margin'||rate<1);
- if(!rateValid)issues.push('Enter a valid pricing rate; gross margin must be below 100%.');
- const gstRate=amount(q.gst)===null?null:amount(q.gst)/100;
- const gstValid=gstRate!==null&&Number.isFinite(gstRate)&&gstRate>=0&&gstRate<=1;
- if(!gstValid)issues.push('Enter a GST rate from 0% to 100%.');
- const kitCost=costValid?activeCosts.reduce((s,r)=>s+r.cost,0):null;
- const kitSale=costValid&&rateValid?round(q.method==='Markup'?kitCost*(1+rate):kitCost/(1-rate)):null;
+ const kitMargin=percent(q.kitMargin),constructionMargin=percent(q.constructionMargin),contingencyRate=percent(q.contingencyRate),gstPercent=num(q.gst),rates=q.rateSet||{};
+ const ratesValid=[kitMargin,constructionMargin,contingencyRate].every(x=>x!==null)&&gstPercent!==null&&gstPercent>=0&&gstPercent<=100&&num(rates.residentialRate)>0&&num(rates.garageRate)>0;
+ if(!ratesValid)issues.push('Enter valid rates; gross margins and contingency must be below 100%.');
+ const areaR=num(q.residentialArea),areaG=num(q.garageArea),enclosed=num(q.totalEnclosedArea),areaValid=areaR!==null&&areaG!==null&&areaR>=0&&areaG>=0&&areaR+areaG>0&&enclosed!==null&&Math.abs(areaR+areaG-enclosed)<0.000001;
+ if(!areaValid)issues.push('Enter residential, garage and total enclosed areas; the separate areas must reconcile.');
+ const arrangementValid=q.variant==='KIT_ONLY'?q.arrangement==='SUPPLY_ONLY':['CUSTOMER_MANAGED','SH_MANAGED'].includes(q.arrangement);
+ if(!arrangementValid)issues.push('Select an arrangement matching this quote workflow.');
+ const kitCost=costValid?activeCosts.reduce((a,x)=>a+x.cost,0):null,discount=num(q.kitDiscount??0);
+ const kitSale=costValid&&kitMargin!==null&&discount!==null&&discount>=0?round(kitCost/(1-kitMargin/100)-discount):null;
+ if(kitSale===null||kitSale<0)issues.push('Enter a valid kit discount and margin.');
+ let override=kitMargin!==num(rates.kitMargin)||constructionMargin!==num(rates.constructionMargin)||contingencyRate!==num(rates.contingency)||gstPercent!==num(rates.gst)||discount>0;
  const work=WORK_TYPES.map(([code,label])=>{
-  const w=q.work.find(r=>r.code===code)||{code,included:false};
-  if(q.variant!=='KIT_PLUS_WORK'||!w.included)return {...w,code,label,included:false,cost:0,sale:0,valid:true};
-  const qty=amount(w.quantity),unitCost=amount(w.unitCost),markup=amount(w.markup);
-  const valid=!!w.scope.trim()&&['sum','m2','m3','m','hr','each'].includes(w.unit)&&[qty,unitCost,markup].every(x=>x!==null&&Number.isFinite(x))&&qty>0&&unitCost>=0&&markup>=0;
-  if(!valid)issues.push(`Complete ${label.toLowerCase()}: scope, quantity, cost and markup.`);
-  return {...w,code,label,cost:valid?qty*unitCost:null,sale:valid?round(qty*unitCost*(1+markup/100)):null,valid};
+  const w=q.work?.find(x=>x.code===code)||{};
+  if(q.variant==='KIT_ONLY'||!w.included)return {...w,code,label,included:false,cost:0,sale:0,reserve:0,valid:true};
+  const quantity=num(w.quantity),unitCost=num(w.unitCost),margin=percent(w.margin),discount=num(w.discount??0);
+  const payerValid=['SH','CUSTOMER'].includes(w.payer)&&(q.arrangement!=='SH_MANAGED'||w.payer==='SH');
+  const valid=!!w.scope?.trim()&&['sum','m2','m3','m','hr','each'].includes(w.unit)&&quantity!==null&&quantity>0&&unitCost!==null&&unitCost>=0&&payerValid&&['RESIDENTIAL','GARAGE_SHED','SHARED','SITE_SPECIFIC'].includes(w.areaCategory)&&discount!==null&&discount>=0&&(w.payer==='CUSTOMER'||margin!==null&&contingencyRate!==null)&&(!w.expiry||isDate(w.expiry));
+  const cost=valid?quantity*unitCost:null,reserve=valid?(w.payer==='SH'&&w.uncertain?round(cost*contingencyRate/100):0):null;
+  const sale=valid?round(w.payer==='CUSTOMER'?cost:(cost+reserve)/(1-margin/100)-discount):null;
+  if(!valid||sale<0)issues.push(`Complete ${label}: scope, payer, area, quantity, cost, margin and validity.`);
+  if(w.payer==='SH'&&(margin!==constructionMargin||discount>0))override=true;
+  return {...w,code,label,cost,reserve,sale,comparable:w.comparable===true&&w.areaCategory!=='SITE_SPECIFIC',valid:valid&&sale>=0};
  });
- const workValid=work.every(w=>w.valid),workSale=workValid?round(work.reduce((s,w)=>s+w.sale,0)):null;
- const subtotal=kitSale!==null&&workValid?round(kitSale+workSale):null;
- const gst=subtotal!==null&&gstValid?round(subtotal*gstRate):null;
- const total=gst!==null?round(subtotal+gst):null;
- const checks=[['customer','Add the customer name.'],['site','Add the site address.'],['reference','Add a quote reference.'],['specification','Describe the exact building specification.'],['supplierQuote','Add the supplier quotation reference.'],['supplierReference','Add the supplier / kit reference.'],['inclusions','Describe what is included.'],['exclusions','Describe the exclusions.'],['terms','Add supply and payment terms.']];
- checks.forEach(([key,msg])=>{if(!q[key]?.trim())issues.push(msg);});
- if(!realDate(q.date)||!realDate(q.validUntil))issues.push('Enter a quote date and valid-until date.');
- else if(q.validUntil<q.date)issues.push('Validity must end on or after the quote date.');
+ const workValid=work.every(w=>w.valid),sum=(key,predicate=()=>true)=>round(work.filter(w=>w.included&&predicate(w)).reduce((a,w)=>a+(w[key]??0),0));
+ const workSale=workValid?sum('sale',w=>w.payer==='SH'):null,thirdParty=workValid?sum('sale',w=>w.payer==='CUSTOMER'):null;
+ const constructionCost=workValid?sum('cost',w=>w.payer==='SH'):null,contingency=workValid?sum('reserve',w=>w.payer==='SH'):null;
+ const subtotal=kitSale!==null&&kitSale>=0&&workSale!==null?round(kitSale+workSale):null,gstRate=ratesValid?gstPercent/100:null;
+ const gst=subtotal!==null&&gstRate!==null?round(subtotal*gstRate):null,total=gst!==null?round(subtotal+gst):null;
+ const target=areaValid&&ratesValid?round(areaR*rates.residentialRate+areaG*rates.garageRate):null;
+ const comparable=arrangementValid&&q.arrangement!=='SUPPLY_ONLY'&&q.standardScopeConfirmed===true&&areaValid&&ratesValid&&workValid&&kitSale!==null&&kitSale>=0;
+ const comparableKitSale=kitSale!==null&&kitCost>0?round(kitSale*activeCosts.filter(c=>q.supplyComparable?.[c.key]!==false).reduce((a,c)=>a+c.cost,0)/kitCost):null;
+ const comparableSale=comparable?round(comparableKitSale+sum('sale',w=>w.comparable)):null,combinedRate=comparable?comparableSale/(areaR+areaG):null;
+ const kitProfit=kitSale!==null?round(kitSale-kitCost):null,constructionProfit=workSale!==null?round(workSale-constructionCost):null;
+ if(override&&!q.overrideReason?.trim())issues.push('Explain pricing overrides or discounts for administrator approval.');
  if(!q.costsConfirmed)issues.push('Confirm current supplier and selected work costs.');
- if(!q.scopeConfirmed)issues.push('Confirm the scope, exclusions and terms.');
- return {base,issues,costValid:costValid&&rateValid&&gstValid,ready:issues.length===0,activeCosts,kitCost,rate,gstRate,kitSale,work,workSale,subtotal,gst,total,profit:subtotal===null?null:round(subtotal-kitCost-work.reduce((s,r)=>s+(r.cost||0),0))};
+ if(!q.scopeConfirmed)issues.push('Confirm scope, exclusions and terms.');
+ if(q.pricingValidated!==true)issues.push('Validate detailed pricing against current costs before issue.');
+ if(q.arrangement!=='SUPPLY_ONLY'&&!q.standardScopeConfirmed)issues.push('Confirm the complete standard scope, or keep this as an internal estimate.');
+ for(const key of ['customer','site','reference','specification','supplierQuote','supplierReference','inclusions','exclusions','terms'])if(!q[key]?.trim())issues.push(`Complete ${key}.`);
+ const expiries=[q.supplierExpiry,...work.filter(w=>w.included).map(w=>w.expiry)].filter(Boolean);
+ const validityValid=isDate(q.date)&&isDate(q.validUntil)&&(!q.supplierExpiry||isDate(q.supplierExpiry))&&expiries.every(isDate);
+ const validityCap=validityValid?[addDays(q.date,30),...expiries].sort()[0]:null;
+ if(!validityValid||q.validUntil<q.date||q.validUntil>validityCap)issues.push('Validity must be within 30 days and no later than supplier or work quotation expiry.');
+ if(isDate(q.validUntil)&&q.validUntil<asOf)issues.push('Quote expired; reconfirm costs and obtain approval before reissue.');
+ return {base,issues,costValid:costValid&&ratesValid,ready:issues.length===0,activeCosts,kitCost,rate:kitMargin===null?null:kitMargin/100,gstRate,kitSale,work,workSale,subtotal,gst,total,thirdParty,projectBudget:subtotal!==null&&thirdParty!==null?round(subtotal+thirdParty):null,constructionCost,kitProfit,constructionProfit,contingency,constructionProfitAfterReserve:constructionProfit!==null?round(constructionProfit-contingency):null,portalRevenue:0,portalCost:0,portalContribution:0,profit:kitProfit!==null&&constructionProfit!==null?round(kitProfit+constructionProfit):null,areaValid,target,targetCombinedRate:target===null?null:target/(areaR+areaG),comparableKitSale,comparableSale,combinedRate,band:colourBand(combinedRate),override,validityCap};
 }
-export function transfer(q,bases){const r=calculate(q,bases);return {schema_version:SCHEMA_VERSION,pricing_variant:q.variant,quote_reference:q.reference,customer_name:q.customer,site_address:q.site,quote_date:q.date,valid_until:q.validUntil,base_number:q.baseId,specification:q.specification,supplier_quote_reference:q.supplierQuote,currency:'NZD',issue_status:r.ready?'Ready to issue':'Draft',kit_cost_ex_gst:r.kitCost,kit_sale_ex_gst:r.kitSale,gst_rate:r.gstRate,...Object.fromEntries(r.work.map(w=>[w.code.toLowerCase()+'_sale_ex_gst',w.sale])),total_ex_gst:r.subtotal,gst_amount:r.gst,total_inc_gst:r.total,details:{supplier_reference:q.supplierReference,inclusions:q.inclusions,exclusions:q.exclusions,terms:q.terms,costs:r.activeCosts,work:r.work,pricing_method:q.method,pricing_rate:r.rate,issues:r.issues}};}
-// Validate imported backups before they reach UI or calculations. No executable content is evaluated.
-export function parseBackup(text){const x=JSON.parse(text);if(x.format!=='sh-pricing-backup'||x.schema_version!==SCHEMA_VERSION||!x.quote)throw Error('Choose an SH Pricing backup JSON file (schema 1.0).');const raw=x.quote;if(!['KIT_ONLY','KIT_PLUS_WORK'].includes(raw.variant))throw Error('Unknown pricing workflow.');const q=newQuote(raw.variant);for(const key of ['customer','site','reference','date','validUntil','specification','supplierReference','supplierQuote','inclusions','exclusions','terms','method','rate','gst'])if(typeof raw[key]==='string'||typeof raw[key]==='number')q[key]=['rate','gst'].includes(key)?raw[key]:String(raw[key]);q.baseId=Number(raw.baseId);if(!Number.isInteger(q.baseId)||q.baseId<1||q.baseId>5)throw Error('Unknown base proposal.');q.costs=Object.fromEntries(COST_TYPES.map(([key])=>[key,typeof raw.costs?.[key]==='string'||typeof raw.costs?.[key]==='number'?raw.costs[key]:'']));q.work=q.work.map(w=>{const r=Array.isArray(raw.work)?raw.work.find(r=>r.code===w.code):null;return r?{...w,included:r.included===true,scope:typeof r.scope==='string'?r.scope:'',unit:typeof r.unit==='string'?r.unit:'sum',...Object.fromEntries(['quantity','unitCost','markup'].map(k=>[k,typeof r[k]==='string'||typeof r[k]==='number'?r[k]:'']))}:w;});return q;}
+export function transfer(q,bases){if(q.calculationVersion!=='2.0')return legacy.transfer(q,bases);const r=calculate(q,bases);return {schema_version:'2.0',calculation_version:'2.0',pricing_variant:q.variant,construction_arrangement:q.arrangement,quote_reference:q.reference,customer_name:q.customer,site_address:q.site,quote_date:q.date,valid_until:q.validUntil,currency:'NZD',rate_set:{...q.rateSet},residential_area_m2:num(q.residentialArea),garage_area_m2:num(q.garageArea),total_enclosed_area_m2:num(q.totalEnclosedArea),kit_cost_ex_gst:r.kitCost,kit_sale_ex_gst:r.kitSale,kit_profit_ex_gst:r.kitProfit,construction_sale_ex_gst:r.workSale,construction_cost_ex_gst:r.constructionCost,construction_profit_ex_gst:r.constructionProfit,contingency_reserve_ex_gst:r.contingency,construction_profit_after_reserve_ex_gst:r.constructionProfitAfterReserve,portal_revenue_ex_gst:0,portal_cost_ex_gst:0,third_party_budget_ex_gst:r.thirdParty,total_ex_gst:r.subtotal,gst_rate:r.gstRate,gst_amount:r.gst,total_inc_gst:r.total,combined_rate_ex_gst:r.combinedRate,colour_band:r.band,issue_status:q.status==='ISSUED'?'Issued':r.ready?'Awaiting approval':'Draft',details:{work:r.work,costs:r.activeCosts,supply_comparable:q.supplyComparable,issues:r.issues,override_reason:q.overrideReason}};}
+// Imported backups never inherit approval or issued status.
+export function parseBackup(text){const x=JSON.parse(text);if(x.schema_version==='1.0')return legacy.parseBackup(text);if(x.format!=='sh-pricing-backup'||x.schema_version!=='2.0'||!['KIT_ONLY','KIT_PLUS_WORK'].includes(x.quote?.variant))throw Error('Choose an SH pricing backup.');if(x.quote.calculationVersion!=='2.0')return legacy.parseBackup(JSON.stringify({...x,schema_version:'1.0'}));const raw=x.quote,q=newQuote(raw.variant);for(const key of ['customer','site','reference','date','validUntil','specification','supplierReference','supplierQuote','inclusions','exclusions','terms','supplierExpiry','overrideReason','arrangement'])if(typeof raw[key]==='string')q[key]=raw[key];for(const key of ['baseId','gst','kitMargin','constructionMargin','contingencyRate','kitDiscount','residentialArea','garageArea','totalEnclosedArea'])if(typeof raw[key]==='number'||typeof raw[key]==='string')q[key]=raw[key];if(!Number.isInteger(Number(q.baseId))||Number(q.baseId)<1||Number(q.baseId)>5)throw Error('Unknown base proposal.');q.costs=Object.fromEntries(COST_TYPES.map(([k])=>[k,typeof raw.costs?.[k]==='number'||typeof raw.costs?.[k]==='string'?raw.costs[k]:'']));q.rateSet={...DEFAULT_RATES,...Object.fromEntries(Object.keys(DEFAULT_RATES).filter(k=>['number','string','boolean'].includes(typeof raw.rateSet?.[k])).map(k=>[k,raw.rateSet[k]]))};q.supplyComparable=Object.fromEntries(COST_TYPES.map(([k])=>[k,raw.supplyComparable?.[k]!==false]));q.work=q.work.map(w=>{const r=raw.work?.find?.(x=>x.code===w.code);if(!r)return w;for(const k of ['scope','unit','payer','areaCategory','expiry'])if(typeof r[k]==='string')w[k]=r[k];for(const k of ['quantity','unitCost','margin','discount'])if(['number','string'].includes(typeof r[k]))w[k]=r[k];for(const k of ['included','comparable','uncertain'])w[k]=r[k]===true;return w;});return q;}

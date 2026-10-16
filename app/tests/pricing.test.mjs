@@ -1,5 +1,5 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';
-import {newQuote,calculate,transfer,parseBackup} from '../public/pricing.js';
+import {newQuote,calculate,transfer,parseBackup} from '../public/legacy-pricing.js';
 const bases=JSON.parse(fs.readFileSync(new URL('../public/bases.json',import.meta.url)));
 function complete(variant='KIT_ONLY'){const q=newQuote(variant);Object.assign(q,{customer:'Test customer',site:'Test site',reference:'SH-TEST',date:'2026-10-15',validUntil:'2026-11-15',specification:'30 Ã— 10 m, 3.2 m knee',supplierReference:'Kit 1',supplierQuote:'Supplier 123',inclusions:'Kit supply',exclusions:'Site labour excluded',terms:'Agreed supplier terms',costsConfirmed:true,scopeConfirmed:true});return q;}
 test('All five historical selling prices reconcile to spreadsheet cents',()=>{for(const b of bases){const q=complete();q.baseId=b.id;const r=calculate(q,bases);assert.equal(r.kitSale,Math.round(b.historicalSale*100)/100);assert.equal(r.ready,true);}});

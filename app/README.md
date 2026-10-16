@@ -1,5 +1,15 @@
 # Shed House pricing app
 
+## Pricing V2 — isolated implementation
+
+See [PRICING_V2.md](PRICING_V2.md) for agreed rules, migration and rollout instructions. The live Site remains on the earlier version until acceptance checks are complete.
+
+New V2 quotes use residential $2,700/m² and garage $1,200/m² as provisional selling targets excluding GST, with combined-area colour bands. Detailed costs drive the quote; targets are not additional charges. Kitset profit, construction profit/contingency and customer-contracted budgets are separate. Portal revenue is deferred.
+
+Only michel@shedhouse.co.nz can publish defaults and issue authenticated snapshots. Historical documents retain their calculations; their old customer-print path is disabled. New customer output requires V2 approval. The new database migration adds append-only rates and issued snapshots without changing historical records.
+
+The sections below describe the original V1 foundations. V2 rules take precedence for versioned new quotes.
+
 Two separate quote workflows share a framework-independent pricing engine:
 
 - `KIT_ONLY`: kit-set supply, freight and supply extras.
